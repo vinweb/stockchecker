@@ -7,7 +7,7 @@ const db = mongoose
         useFindAndModify: false,
     })
     .then(() => {
-        console.log("MongoDB connected...");
+        console.log("MongoDB connected.");
     })
     .catch((err) => console.log(err));
 
