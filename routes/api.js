@@ -1,6 +1,7 @@
 "use strict";
 const axios = require("axios");
 const mongoose = require("mongoose");
+const { then } = require("./db-connection");
 const { Schema } = mongoose;
 require("./db-connection");
 
@@ -15,126 +16,146 @@ const Stock = mongoose.model(
 
 module.exports = function (app) {
     app.route("/api/stock-prices").get(function (req, res) {
-        let ip = req.ip;
+        const ip = req.ip;
+
+        async function stockProcessor(name) {
+            const stockExists = await Stock.exists({
+                stock: name,
+            });
+            const stockExistsWithIp = await Stock.exists({
+                $and: [{ stock: name }, { ips: ip }],
+            });
+
+            // Nincs like, nincs doc
+            if (!stockExists && !req.query.like) {
+                console.log("Nincs like, nincs doc");
+                let stockNoLike = new Stock({
+                    stock: name,
+                });
+                await stockNoLike.save();
+            }
+
+            // Nincs like, van doc
+            if (stockExists && !req.query.like) {
+                console.log("Nincs like, van doc");
+            }
+
+            // Van like, nincs doc
+            if (!stockExists && req.query.like) {
+                console.log("Van like, nincs doc");
+                let stockWithLike = new Stock({
+                    stock: name,
+                    likes: 1,
+                    ips: ip,
+                });
+                await stockWithLike.save();
+            }
+
+            // Van like, van doc, nincs IP
+            if (stockExists && !stockExistsWithIp && req.query.like) {
+                console.log("Van like, van doc, nincs IP: " + ip);
+
+                await Stock.findOneAndUpdate(
+                    { stock: name },
+                    {
+                        $inc: { likes: 1 },
+                        $push: { ips: ip },
+                    }
+                );
+            }
+        }
+
         if (Array.isArray(req.query.stock)) {
-            console.log(req.query.stock);
+            const [name1, name2] = req.query.stock;
+            const name1ToUrl = name1.toLowerCase();
+            const name2ToUrl = name2.toLowerCase();
+            const url1 = `https://stock-price-checker-proxy.freecodecamp.rocks/v1/stock/${name1ToUrl}/quote`;
+            const url2 = `https://stock-price-checker-proxy.freecodecamp.rocks/v1/stock/${name2ToUrl}/quote`;
+            const requestOne = axios.get(url1);
+            const requestTwo = axios.get(url2);
+
+            axios
+                .all([requestOne, requestTwo])
+                .then(
+                    axios.spread(async (...responses) => {
+                        try {
+                            for (let i = 0; i < 2; i++) {
+                                let name = req.query.stock[i].toUpperCase();
+                                await stockProcessor(name);
+                            }
+                            await Stock.find(
+                                {
+                                    $or: [
+                                        {
+                                            stock: req.query.stock[0].toUpperCase(),
+                                        },
+                                        {
+                                            stock: req.query.stock[1].toUpperCase(),
+                                        },
+                                    ],
+                                },
+                                (err, document) => {
+                                    if (err) return console.error(err);
+                                    return res.json({
+                                        stockData: [
+                                            {
+                                                stock: document[0].stock,
+                                                price:
+                                                    responses[0].data
+                                                        .latestPrice,
+                                                rel_likes:
+                                                    document[0].likes -
+                                                    document[1].likes,
+                                            },
+                                            {
+                                                stock: document[1].stock,
+                                                price:
+                                                    responses[1].data
+                                                        .latestPrice,
+                                                rel_likes:
+                                                    document[1].likes -
+                                                    document[0].likes,
+                                            },
+                                        ],
+                                    });
+                                }
+                            );
+                        } catch (err) {
+                            console.log(err);
+                        }
+                    })
+                )
+                .catch((errors) => {
+                    console.log(errors);
+                });
         } else {
-            let nameToUrl = req.query.stock.toLowerCase();
-            let name = req.query.stock.toUpperCase();
-            let url = `https://stock-price-checker-proxy.freecodecamp.rocks/v1/stock/${nameToUrl}/quote`;
+            const name = req.query.stock.toUpperCase();
+            const nameToUrl = req.query.stock.toLowerCase();
+            const url = `https://stock-price-checker-proxy.freecodecamp.rocks/v1/stock/${nameToUrl}/quote`;
 
             axios
                 .get(url)
-                .then(function (response) {
-                    // Ha nincs ilyen stock a felhőben:
-                    if (response.data === "Unknown symbol") {
-                        return res.json({
-                            data: "Unknown symbol",
-                        });
-                    }
+                .then(async function (response) {
                     let price = response.data.latestPrice;
-                    // Van-e like?
-                    if (req.query.like) {
-                        Stock.exists({ stock: name }, function (err, result) {
-                            if (err) {
-                                console.log(err);
-                            }
-                            if (result) {
-                                Stock.find(
-                                    { $and: [{ stock: name }, { ips: ip }] },
-                                    (err, result) => {
-                                        if (err) {
-                                            console.log(err);
-                                        }
-                                        console.log(
-                                            "Volt már ilyen IP-vel like."
-                                        );
-                                        if (result.length > 0) {
-                                            res.json({
-                                                stockData: {
-                                                    stock: result[0].stock,
-                                                    price: price,
-                                                    likes: result[0].likes,
-                                                },
-                                            });
-                                        } else {
-                                            console.log(
-                                                "Még nem volt ilyen IP-vel like."
-                                            );
-                                            Stock.findOneAndUpdate(
-                                                { stock: name },
-                                                {
-                                                    $inc: { likes: 1 },
-                                                    $push: { ips: ip },
-                                                },
-                                                { new: true },
-                                                (err, updatedDoc) => {
-                                                    res.json({
-                                                        stockData: {
-                                                            stock:
-                                                                updatedDoc.stock,
-                                                            price: price,
-                                                            likes:
-                                                                updatedDoc.likes,
-                                                        },
-                                                    });
-                                                }
-                                            );
-                                        }
-                                    }
-                                );
-                            }
-                            if (!result) {
-                                console.log("Van like, nincs doc.");
-                                let stockWithLike = new Stock({
-                                    stock: name,
-                                    likes: 1,
-                                    ips: ip,
-                                });
-                                stockWithLike.save((err, doc) => {
-                                    res.json({
-                                        stockData: {
-                                            stock: doc.stock,
-                                            price: price,
-                                            likes: doc.likes,
-                                        },
-                                    });
+
+                    try {
+                        await stockProcessor(name);
+
+                        await Stock.findOne(
+                            { stock: name },
+                            (err, document) => {
+                                if (err) return console.error(err);
+                                return res.json({
+                                    stockData: {
+                                        stock: document.stock,
+                                        price: price,
+                                        likes: document.likes,
+                                    },
                                 });
                             }
-                        });
-                    } else {
-                        Stock.exists({ stock: name }, function (err, result) {
-                            if (err) {
-                                console.log(err);
-                            }
-                            if (result) {
-                                console.log("Nincs like, van már doc.");
-                                Stock.findOne({ stock: name }, (err, doc) => {
-                                    res.json({
-                                        stockData: {
-                                            stock: doc.stock,
-                                            price: price,
-                                            likes: doc.likes,
-                                        },
-                                    });
-                                });
-                            }
-                            if (!result) {
-                                console.log("Nincs like, nincs doc.");
-                                let stockNoLike = new Stock({
-                                    stock: name,
-                                });
-                                stockNoLike.save((err, doc) => {
-                                    res.json({
-                                        stockData: {
-                                            stock: doc.stock,
-                                            price: price,
-                                            likes: doc.likes,
-                                        },
-                                    });
-                                });
-                            }
-                        });
+                        );
+                    } catch (err) {
+                        console.log(err);
                     }
                 })
                 .catch(function (error) {

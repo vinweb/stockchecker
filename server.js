@@ -17,14 +17,15 @@ app.use(cors({ origin: "*" })); //For FCC testing purposes only
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-/* app.use(
+app.use(
     helmet.contentSecurityPolicy({
         directives: {
+            defaultSrc: ["'self'"],
             scriptSrc: ["'self'"],
             styleSrc: ["'self'"],
         },
     })
-); */
+);
 app.enable("trust proxy");
 
 //Index page (static HTML)
